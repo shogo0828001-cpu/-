@@ -1,0 +1,246 @@
+.flight-chart-container {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  display: flex;
+  flex-direction: column;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  color: #333;
+}
+
+.flight-header {
+  background: rgba(255, 255, 255, 0.95);
+  padding: 20px;
+  text-align: center;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.flight-header h1 {
+  margin: 0;
+  font-size: 28px;
+  color: #667eea;
+}
+
+.flight-header p {
+  margin: 8px 0 0 0;
+  color: #999;
+  font-size: 14px;
+}
+
+.view-selector {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.9);
+  overflow-x: auto;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.view-selector button {
+  flex-shrink: 0;
+  padding: 8px 16px;
+  border: 2px solid #ddd;
+  background: white;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+  color: #666;
+}
+
+.view-selector button:hover {
+  border-color: #667eea;
+  color: #667eea;
+}
+
+.view-selector button.active {
+  background: #667eea;
+  color: white;
+  border-color: #667eea;
+}
+
+.chart-main {
+  flex: 1;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.chart-section {
+  background: white;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 16px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.chart-section h2 {
+  margin: 0 0 20px 0;
+  font-size: 20px;
+  color: #333;
+  border-bottom: 2px solid #667eea;
+  padding-bottom: 10px;
+}
+
+.flights-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.flight-item {
+  padding: 16px;
+  border-left: 4px solid #667eea;
+  background: #f8f9ff;
+  border-radius: 6px;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.flight-item:active {
+  transform: scale(0.98);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.flight-header-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.airline {
+  font-weight: 600;
+  color: #667eea;
+  font-size: 14px;
+}
+
+.flight-id {
+  font-size: 12px;
+  color: #999;
+  font-family: 'Courier New', monospace;
+}
+
+.flight-route {
+  font-size: 16px;
+  font-weight: 500;
+  color: #333;
+  margin-bottom: 8px;
+}
+
+.flight-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: #666;
+}
+
+.flight-details span {
+  background: white;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.flight-footer {
+  background: rgba(255, 255, 255, 0.95);
+  padding: 16px;
+  text-align: center;
+  border-top: 1px solid #e0e0e0;
+  font-size: 12px;
+  color: #999;
+}
+
+.flight-footer p {
+  margin: 4px 0;
+}
+
+/* モバイル対応 */
+@media (max-width: 768px) {
+  .flight-header h1 {
+    font-size: 22px;
+  }
+
+  .view-selector {
+    padding: 8px;
+    gap: 6px;
+  }
+
+  .view-selector button {
+    padding: 6px 12px;
+    font-size: 12px;
+  }
+
+  .chart-main {
+    padding: 12px;
+  }
+
+  .chart-section {
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+
+  .chart-section h2 {
+    font-size: 16px;
+    margin-bottom: 16px;
+  }
+
+  .flight-item {
+    padding: 12px;
+  }
+
+  .flight-route {
+    font-size: 14px;
+  }
+
+  .flight-details {
+    gap: 8px;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 480px) {
+  .flight-header h1 {
+    font-size: 18px;
+  }
+
+  .flight-header {
+    padding: 12px;
+  }
+
+  .view-selector {
+    padding: 6px;
+    gap: 4px;
+  }
+
+  .view-selector button {
+    padding: 6px 10px;
+    font-size: 11px;
+  }
+
+  .chart-main {
+    padding: 8px;
+  }
+
+  .chart-section {
+    padding: 12px;
+    margin-bottom: 8px;
+  }
+
+  .flight-header-info {
+    font-size: 12px;
+  }
+
+  .flight-route {
+    font-size: 13px;
+  }
+}
+
+/* チャートの高さ調整 */
+.recharts-responsive-container {
+  min-height: 300px;
+}
+
+@media (max-width: 600px) {
+  .recharts-responsive-container {
+    min-height: 250px;
+  }
+}
