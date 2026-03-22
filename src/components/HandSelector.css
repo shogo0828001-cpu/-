@@ -1,0 +1,57 @@
+.hand-selector {
+  margin-top: 20px;
+}
+
+.hand-selector h3 {
+  text-align: center;
+  color: #333;
+  margin-bottom: 15px;
+}
+
+.hands-container {
+  display: flex;
+  justify-content: center;
+  gap: 15px;
+}
+
+.hand-button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 15px 20px;
+  background: #f0f0f0;
+  border: 3px solid #999;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 0.95em;
+  font-weight: bold;
+  min-width: 80px;
+}
+
+.hand-button:hover:not(:disabled) {
+  background: #e0e0e0;
+  transform: translateY(-3px);
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.15);
+}
+
+.hand-button.selected {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border-color: #764ba2;
+  box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+}
+
+.hand-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.hand-emoji {
+  font-size: 2em;
+}
+
+.hand-label {
+  font-size: 0.85em;
+}

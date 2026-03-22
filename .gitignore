@@ -11,3 +11,13 @@ venv/
 dist/
 build/
 .DS_Store
+
+# Node/JavaScript
+node_modules/
+.npm
+*.tsbuildinfo
+*.log
+npm-debug.log*
+
+# Vite
+.vite/

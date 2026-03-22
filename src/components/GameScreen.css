@@ -1,0 +1,126 @@
+.game-screen {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.game-content {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 30px;
+  margin-top: 30px;
+  align-items: start;
+}
+
+.player-section {
+  background: white;
+  border-radius: 15px;
+  padding: 25px;
+  box-shadow: 0 5px 20px rgba(0, 0, 0, 0.1);
+}
+
+.player-section h2 {
+  text-align: center;
+  color: #667eea;
+  margin-bottom: 20px;
+  font-size: 1.5em;
+}
+
+.vs-section {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2em;
+  font-weight: bold;
+  color: #666;
+  text-align: center;
+  min-width: 80px;
+}
+
+.game-over {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: white;
+  border-radius: 20px;
+  padding: 60px 40px;
+  text-align: center;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  max-width: 500px;
+  margin: 50px auto;
+}
+
+.game-over h1 {
+  font-size: 3em;
+  color: #333;
+  margin-bottom: 20px;
+}
+
+.winner-text {
+  font-size: 2em;
+  color: #667eea;
+  margin: 20px 0;
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+.turn-count {
+  font-size: 1.2em;
+  color: #666;
+  margin: 20px 0;
+}
+
+.play-again-btn {
+  padding: 15px 40px;
+  font-size: 1.1em;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-top: 30px;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.play-again-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+}
+
+.ready-notice {
+  text-align: center;
+  padding: 15px 20px;
+  background: #e3f2fd;
+  border-radius: 8px;
+  color: #1976d2;
+  font-weight: bold;
+  margin-top: 20px;
+}
+
+@media (max-width: 800px) {
+  .game-content {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+
+  .vs-section {
+    display: none;
+  }
+
+  .player-section {
+    padding: 15px;
+  }
+
+  .player-section h2 {
+    font-size: 1.2em;
+  }
+}
