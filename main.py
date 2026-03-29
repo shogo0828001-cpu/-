@@ -1,351 +1,1079 @@
-"""メルカリ転売利益計算アプリ"""
-
-import csv
-import io
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from typing import List
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, ForeignKey, Boolean, Table
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session, relationship
+from pydantic import BaseModel, EmailStr
+from datetime import datetime, timedelta
+from passlib.context import CryptContext
+from jose import JWTError, jwt
+import os
+from pathlib import Path
 
-from profit_calculator import ProfitCalculator
-from amazon_api import AmazonAPI
+# Database setup
+DATABASE_URL = "sqlite:///./freelance.db"
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
-app = FastAPI(title="メルカリ転売利益計算")
-amazon = AmazonAPI()
+# Security setup
+SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
+ALGORITHM = "HS256"
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# シンプルなHTMLインターフェース
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>メルカリ転売利益計算</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        header {
-            background: white;
-            padding: 30px;
-            border-radius: 10px;
-            margin-bottom: 30px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-        h1 {
-            color: #333;
-            margin-bottom: 10px;
-        }
-        .subtitle {
-            color: #666;
-            font-size: 14px;
-        }
-        .upload-section {
-            background: white;
-            padding: 30px;
-            border-radius: 10px;
-            margin-bottom: 30px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-        .form-group {
-            margin-bottom: 20px;
-        }
-        label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: 600;
-            color: #333;
-        }
-        input[type="file"], input[type="number"] {
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            width: 100%;
-            font-size: 14px;
-        }
-        button {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 12px 30px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 16px;
-            font-weight: 600;
-            transition: transform 0.2s;
-        }
-        button:hover {
-            transform: translateY(-2px);
-        }
-        button:active {
-            transform: translateY(0);
-        }
-        .results {
-            background: white;
-            padding: 30px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 20px;
-        }
-        thead {
-            background: #f5f5f5;
-        }
-        th {
-            padding: 12px;
-            text-align: left;
-            font-weight: 600;
-            color: #333;
-            border-bottom: 2px solid #ddd;
-        }
-        td {
-            padding: 12px;
-            border-bottom: 1px solid #eee;
-        }
-        tr:hover {
-            background: #f9f9f9;
-        }
-        .profit-positive {
-            color: #10b981;
-            font-weight: 600;
-        }
-        .profit-negative {
-            color: #ef4444;
-            font-weight: 600;
-        }
-        .message {
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 20px;
-        }
-        .message.info {
-            background: #e0f2fe;
-            color: #0369a1;
-        }
-        .message.error {
-            background: #fee2e2;
-            color: #b91c1c;
-        }
-        .message.success {
-            background: #dcfce7;
-            color: #166534;
-        }
-        .loading {
-            display: none;
-            text-align: center;
-            color: white;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <header>
-            <h1>📊 メルカリ転売利益計算</h1>
-            <p class="subtitle">Amazon仕入れ価格とメルカリ売却価格から自動で利益を計算</p>
-        </header>
+# ============================================================================
+# Database Models
+# ============================================================================
 
-        <div class="upload-section">
-            <h2>ステップ 1: データをアップロード</h2>
-            <form id="uploadForm" enctype="multipart/form-data">
-                <div class="form-group">
-                    <label for="csvFile">メルカリ商品情報（CSVファイル）</label>
-                    <input type="file" id="csvFile" name="file" accept=".csv" required>
-                    <small style="color: #666; margin-top: 5px; display: block;">
-                        ※CSV形式: 商品名, メルカリ想定売却価格 (例: iPhone 13, 50000)
-                    </small>
-                </div>
+class User(Base):
+    __tablename__ = "users"
 
-                <div class="form-group">
-                    <label for="shippingCost">送料（円）デフォルト: 500</label>
-                    <input type="number" id="shippingCost" name="shipping_cost" value="500" min="0">
-                </div>
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True)
+    username = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
+    user_type = Column(String)  # "engineer" or "company"
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-                <button type="submit">計算開始</button>
-            </form>
-        </div>
+    engineer = relationship("Engineer", back_populates="user", uselist=False)
+    company = relationship("Company", back_populates="user", uselist=False)
+    applications = relationship("Application", back_populates="user")
 
-        <div id="loading" class="loading">
-            <p>計算中...</p>
-        </div>
 
-        <div id="resultsContainer"></div>
-    </div>
+class Engineer(Base):
+    __tablename__ = "engineers"
 
-    <script>
-        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True)
+    full_name = Column(String)
+    bio = Column(Text)
+    hourly_rate = Column(Float)  # 時給（円）
+    experience_years = Column(Integer)
+    skills = Column(String)  # JSON形式：["Python", "JavaScript", ...]
+    portfolio_url = Column(String, nullable=True)
+    github_url = Column(String, nullable=True)
+    avatar_url = Column(String, nullable=True)
+    rating = Column(Float, default=0.0)
+    total_projects = Column(Integer, default=0)
+    available = Column(Boolean, default=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-            const formData = new FormData();
-            const file = document.getElementById('csvFile').files[0];
-            const shippingCost = document.getElementById('shippingCost').value;
+    user = relationship("User", back_populates="engineer")
 
-            if (!file) {
-                alert('CSVファイルを選択してください');
-                return;
-            }
 
-            formData.append('file', file);
-            formData.append('shipping_cost', shippingCost);
+class Company(Base):
+    __tablename__ = "companies"
 
-            document.getElementById('loading').style.display = 'block';
-            document.getElementById('resultsContainer').innerHTML = '';
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True)
+    company_name = Column(String)
+    industry = Column(String)
+    website = Column(String, nullable=True)
+    description = Column(Text)
+    logo_url = Column(String, nullable=True)
+    employee_count = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-            try {
-                const response = await fetch('/api/calculate', {
-                    method: 'POST',
-                    body: formData
-                });
+    user = relationship("User", back_populates="company")
+    jobs = relationship("Job", back_populates="company")
 
-                const data = await response.json();
-                displayResults(data);
-            } catch (error) {
-                displayError('エラーが発生しました: ' + error.message);
-            } finally {
-                document.getElementById('loading').style.display = 'none';
-            }
-        });
 
-        function displayResults(data) {
-            const container = document.getElementById('resultsContainer');
+class Job(Base):
+    __tablename__ = "jobs"
 
-            if (data.error) {
-                displayError(data.error);
-                return;
-            }
+    id = Column(Integer, primary_key=True, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id"))
+    title = Column(String)
+    description = Column(Text)
+    required_skills = Column(String)  # JSON形式
+    budget = Column(Float)
+    duration = Column(String)  # "短期", "中期", "長期"
+    status = Column(String, default="active")  # active, closed, paused
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-            const results = data.results || [];
-            const profitable = results.filter(r => r.is_profitable);
+    company = relationship("Company", back_populates="jobs")
+    applications = relationship("Application", back_populates="job")
 
-            let html = '<div class="results">';
-            html += `<h2>📈 計算結果</h2>`;
-            html += `<div class="message info">合計 ${results.length} 件 / 利益が出る商品 ${profitable.length} 件</div>`;
 
-            if (results.length === 0) {
-                html += '<div class="message error">データを読み込めませんでした</div>';
-            } else {
-                html += '<table>';
-                html += '<thead><tr>';
-                html += '<th>商品名</th>';
-                html += '<th>メルカリ売却価格</th>';
-                html += '<th>Amazon仕入れ価格</th>';
-                html += '<th>手数料</th>';
-                html += '<th>送料</th>';
-                html += '<th>利益</th>';
-                html += '<th>利益率</th>';
-                html += '</tr></thead><tbody>';
+class Application(Base):
+    __tablename__ = "applications"
 
-                results.forEach(item => {
-                    const profitClass = item.profit > 0 ? 'profit-positive' : 'profit-negative';
-                    html += '<tr>';
-                    html += `<td>${escapeHtml(item.product_name)}</td>`;
-                    html += `<td>¥${item.mercari_price.toLocaleString()}</td>`;
-                    html += `<td>¥${item.amazon_price.toLocaleString()}</td>`;
-                    html += `<td>¥${item.mercari_fee.toLocaleString()}</td>`;
-                    html += `<td>¥${item.shipping_cost.toLocaleString()}</td>`;
-                    html += `<td class="${profitClass}">¥${item.profit.toLocaleString()}</td>`;
-                    html += `<td class="${profitClass}">${item.profit_rate}%</td>`;
-                    html += '</tr>';
-                });
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    job_id = Column(Integer, ForeignKey("jobs.id"))
+    status = Column(String, default="pending")  # pending, accepted, rejected, withdrawn
+    proposed_rate = Column(Float, nullable=True)
+    cover_letter = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-                html += '</tbody></table>';
-            }
+    user = relationship("User", back_populates="applications")
+    job = relationship("Job", back_populates="applications")
 
-            html += '</div>';
-            container.innerHTML = html;
-        }
 
-        function displayError(message) {
-            const container = document.getElementById('resultsContainer');
-            container.innerHTML = `<div class="results"><div class="message error">${escapeHtml(message)}</div></div>`;
-        }
+class Review(Base):
+    __tablename__ = "reviews"
 
-        function escapeHtml(text) {
-            const map = {
-                '&': '&amp;',
-                '<': '&lt;',
-                '>': '&gt;',
-                '"': '&quot;',
-                "'": '&#039;'
-            };
-            return String(text).replace(/[&<>"']/g, m => map[m]);
-        }
-    </script>
-</body>
-</html>
-"""
+    id = Column(Integer, primary_key=True, index=True)
+    from_user_id = Column(Integer, ForeignKey("users.id"))
+    to_user_id = Column(Integer, ForeignKey("users.id"))
+    job_id = Column(Integer, ForeignKey("jobs.id"), nullable=True)
+    rating = Column(Integer)  # 1-5
+    comment = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# Create tables
+Base.metadata.create_all(bind=engine)
+
+# ============================================================================
+# Pydantic Models
+# ============================================================================
+
+class UserRegister(BaseModel):
+    email: EmailStr
+    username: str
+    password: str
+    user_type: str  # "engineer" or "company"
+
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+
+class EngineerProfile(BaseModel):
+    full_name: str
+    bio: str
+    hourly_rate: float
+    experience_years: int
+    skills: str
+    portfolio_url: str = None
+    github_url: str = None
+
+
+class CompanyProfile(BaseModel):
+    company_name: str
+    industry: str
+    website: str = None
+    description: str
+    employee_count: str = None
+
+
+class JobCreate(BaseModel):
+    title: str
+    description: str
+    required_skills: str
+    budget: float
+    duration: str
+
+
+class ApplicationCreate(BaseModel):
+    job_id: int
+    proposed_rate: float = None
+    cover_letter: str
+
+
+class ReviewCreate(BaseModel):
+    to_user_id: int
+    rating: int
+    comment: str
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+
+# ============================================================================
+# FastAPI App
+# ============================================================================
+
+app = FastAPI(title="フリーランスエンジニア集客プラットフォーム")
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Dependency
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# ============================================================================
+# Authentication
+# ============================================================================
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
+
+
+def get_password_hash(password: str) -> str:
+    return pwd_context.hash(password)
+
+
+def create_access_token(data: dict, expires_delta: timedelta = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(days=7)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+
+async def get_current_user(token: str = None, db: Session = Depends(get_db)):
+    if not token:
+        raise HTTPException(status_code=401, detail="認証が必要です")
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: int = payload.get("sub")
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="無効なトークンです")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="無効なトークンです")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=401, detail="ユーザーが見つかりません")
+    return user
+
+
+# ============================================================================
+# API Routes
+# ============================================================================
 
 @app.get("/", response_class=HTMLResponse)
-async def index():
-    """トップページ"""
-    return HTML_TEMPLATE
+async def root():
+    """ホームページ"""
+    return get_home_page()
 
-@app.post("/api/calculate")
-async def calculate(file: UploadFile = File(...), shipping_cost: float = Form(500)):
-    """
-    CSVをアップロードして利益を計算
 
-    Args:
-        file: CSVファイル
-        shipping_cost: 送料
+@app.post("/api/register")
+async def register(user_data: UserRegister, db: Session = Depends(get_db)):
+    """新規登録"""
+    # ユーザー存在確認
+    if db.query(User).filter(User.email == user_data.email).first():
+        raise HTTPException(status_code=400, detail="このメールアドレスは既に登録されています")
 
-    Returns:
-        計算結果
-    """
-    try:
-        contents = await file.read()
-        csv_text = contents.decode('utf-8')
+    if db.query(User).filter(User.username == user_data.username).first():
+        raise HTTPException(status_code=400, detail="このユーザー名は既に使用されています")
 
-        # CSVを解析
-        csv_reader = csv.reader(io.StringIO(csv_text))
-        results = []
+    # ユーザー作成
+    hashed_password = get_password_hash(user_data.password)
+    user = User(
+        email=user_data.email,
+        username=user_data.username,
+        hashed_password=hashed_password,
+        user_type=user_data.user_type
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
 
-        for row_idx, row in enumerate(csv_reader):
-            if row_idx == 0 or not row or len(row) < 2:
-                continue  # ヘッダーか空行をスキップ
+    # トークン生成
+    access_token = create_access_token(data={"sub": user.id})
 
-            try:
-                product_name = row[0].strip()
-                mercari_price = float(row[1].strip())
+    return {
+        "message": "登録成功しました",
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user_id": user.id,
+        "user_type": user.user_type
+    }
 
-                # Amazon価格を取得（現在はモック）
-                amazon_product = amazon.search_by_keyword(product_name)
-                amazon_price = amazon_product['Price'] if amazon_product else 0
 
-                # 利益計算
-                profit_data = ProfitCalculator.calculate(
-                    mercari_price=mercari_price,
-                    amazon_price=amazon_price,
-                    shipping_cost=shipping_cost
-                )
+@app.post("/api/login")
+async def login(user_data: UserLogin, db: Session = Depends(get_db)):
+    """ログイン"""
+    user = db.query(User).filter(User.email == user_data.email).first()
+    if not user or not verify_password(user_data.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="メールアドレスまたはパスワードが間違っています")
 
-                result = {
-                    'product_name': product_name,
-                    **profit_data
+    access_token = create_access_token(data={"sub": user.id})
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user_id": user.id,
+        "user_type": user.user_type
+    }
+
+
+@app.post("/api/engineer/profile")
+async def create_engineer_profile(
+    profile: EngineerProfile,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """エンジニアプロフィール作成"""
+    if current_user.user_type != "engineer":
+        raise HTTPException(status_code=403, detail="エンジニアのみ使用できます")
+
+    engineer = Engineer(
+        user_id=current_user.id,
+        full_name=profile.full_name,
+        bio=profile.bio,
+        hourly_rate=profile.hourly_rate,
+        experience_years=profile.experience_years,
+        skills=profile.skills,
+        portfolio_url=profile.portfolio_url,
+        github_url=profile.github_url
+    )
+    db.add(engineer)
+    db.commit()
+    db.refresh(engineer)
+    return {"message": "プロフィール作成成功", "engineer_id": engineer.id}
+
+
+@app.post("/api/company/profile")
+async def create_company_profile(
+    profile: CompanyProfile,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """企業プロフィール作成"""
+    if current_user.user_type != "company":
+        raise HTTPException(status_code=403, detail="企業のみ使用できます")
+
+    company = Company(
+        user_id=current_user.id,
+        company_name=profile.company_name,
+        industry=profile.industry,
+        website=profile.website,
+        description=profile.description,
+        employee_count=profile.employee_count
+    )
+    db.add(company)
+    db.commit()
+    db.refresh(company)
+    return {"message": "企業プロフィール作成成功", "company_id": company.id}
+
+
+@app.post("/api/jobs")
+async def create_job(
+    job: JobCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """案件投稿（企業向け）"""
+    if current_user.user_type != "company":
+        raise HTTPException(status_code=403, detail="企業のみ案件投稿できます")
+
+    company = db.query(Company).filter(Company.user_id == current_user.id).first()
+    if not company:
+        raise HTTPException(status_code=404, detail="企業プロフィールが見つかりません")
+
+    new_job = Job(
+        company_id=company.id,
+        title=job.title,
+        description=job.description,
+        required_skills=job.required_skills,
+        budget=job.budget,
+        duration=job.duration
+    )
+    db.add(new_job)
+    db.commit()
+    db.refresh(new_job)
+    return {"message": "案件投稿成功", "job_id": new_job.id}
+
+
+@app.get("/api/jobs")
+async def list_jobs(db: Session = Depends(get_db)):
+    """案件一覧取得"""
+    jobs = db.query(Job).filter(Job.status == "active").all()
+    return [
+        {
+            "id": job.id,
+            "title": job.title,
+            "description": job.description,
+            "required_skills": job.required_skills,
+            "budget": job.budget,
+            "duration": job.duration,
+            "company_id": job.company_id,
+            "created_at": job.created_at
+        }
+        for job in jobs
+    ]
+
+
+@app.get("/api/jobs/{job_id}")
+async def get_job(job_id: int, db: Session = Depends(get_db)):
+    """案件詳細取得"""
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="案件が見つかりません")
+
+    company = db.query(Company).filter(Company.id == job.company_id).first()
+    return {
+        "id": job.id,
+        "title": job.title,
+        "description": job.description,
+        "required_skills": job.required_skills,
+        "budget": job.budget,
+        "duration": job.duration,
+        "company": {
+            "id": company.id,
+            "name": company.company_name,
+            "industry": company.industry
+        } if company else None,
+        "created_at": job.created_at
+    }
+
+
+@app.post("/api/applications")
+async def create_application(
+    app_data: ApplicationCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """案件に応募"""
+    if current_user.user_type != "engineer":
+        raise HTTPException(status_code=403, detail="エンジニアのみ応募できます")
+
+    # 案件存在確認
+    job = db.query(Job).filter(Job.id == app_data.job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="案件が見つかりません")
+
+    # 既存の応募確認
+    existing = db.query(Application).filter(
+        Application.user_id == current_user.id,
+        Application.job_id == app_data.job_id
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="既に応募しています")
+
+    application = Application(
+        user_id=current_user.id,
+        job_id=app_data.job_id,
+        proposed_rate=app_data.proposed_rate,
+        cover_letter=app_data.cover_letter
+    )
+    db.add(application)
+    db.commit()
+    db.refresh(application)
+    return {"message": "応募成功しました", "application_id": application.id}
+
+
+@app.get("/api/engineers")
+async def list_engineers(db: Session = Depends(get_db)):
+    """エンジニア一覧取得"""
+    engineers = db.query(Engineer).filter(Engineer.available == True).all()
+    return [
+        {
+            "id": eng.id,
+            "full_name": eng.full_name,
+            "hourly_rate": eng.hourly_rate,
+            "experience_years": eng.experience_years,
+            "skills": eng.skills,
+            "rating": eng.rating,
+            "total_projects": eng.total_projects,
+            "portfolio_url": eng.portfolio_url,
+            "github_url": eng.github_url
+        }
+        for eng in engineers
+    ]
+
+
+@app.get("/api/engineers/{engineer_id}")
+async def get_engineer(engineer_id: int, db: Session = Depends(get_db)):
+    """エンジニア詳細取得"""
+    engineer = db.query(Engineer).filter(Engineer.id == engineer_id).first()
+    if not engineer:
+        raise HTTPException(status_code=404, detail="エンジニアが見つかりません")
+
+    user = engineer.user
+    return {
+        "id": engineer.id,
+        "full_name": engineer.full_name,
+        "bio": engineer.bio,
+        "hourly_rate": engineer.hourly_rate,
+        "experience_years": engineer.experience_years,
+        "skills": engineer.skills,
+        "rating": engineer.rating,
+        "total_projects": engineer.total_projects,
+        "portfolio_url": engineer.portfolio_url,
+        "github_url": engineer.github_url,
+        "user_email": user.email if user else None
+    }
+
+
+# ============================================================================
+# Static HTML Pages
+# ============================================================================
+
+def get_home_page():
+    return """
+    <!DOCTYPE html>
+    <html lang="ja">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>フリーランスエンジニア集客プラットフォーム</title>
+        <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+
+            body {
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                line-height: 1.6;
+                color: #333;
+                background-color: #f8f9fa;
+            }
+
+            header {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 1rem 2rem;
+                position: sticky;
+                top: 0;
+                z-index: 100;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            }
+
+            header nav {
+                max-width: 1200px;
+                margin: 0 auto;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+
+            header h1 {
+                font-size: 1.8rem;
+                font-weight: 700;
+            }
+
+            header nav a {
+                color: white;
+                text-decoration: none;
+                margin: 0 1rem;
+                transition: opacity 0.3s;
+            }
+
+            header nav a:hover {
+                opacity: 0.8;
+            }
+
+            .container {
+                max-width: 1200px;
+                margin: 0 auto;
+                padding: 0 2rem;
+            }
+
+            .hero {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 4rem 2rem;
+                text-align: center;
+                margin: 2rem 0;
+                border-radius: 10px;
+            }
+
+            .hero h2 {
+                font-size: 2.5rem;
+                margin-bottom: 1rem;
+            }
+
+            .hero p {
+                font-size: 1.2rem;
+                margin-bottom: 2rem;
+                opacity: 0.9;
+            }
+
+            .btn-group {
+                display: flex;
+                gap: 1rem;
+                justify-content: center;
+                flex-wrap: wrap;
+            }
+
+            .btn {
+                padding: 0.8rem 2rem;
+                border: none;
+                border-radius: 5px;
+                font-size: 1rem;
+                cursor: pointer;
+                transition: all 0.3s;
+                text-decoration: none;
+                display: inline-block;
+            }
+
+            .btn-primary {
+                background: #667eea;
+                color: white;
+            }
+
+            .btn-primary:hover {
+                background: #5568d3;
+                transform: translateY(-2px);
+                box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+            }
+
+            .btn-secondary {
+                background: white;
+                color: #667eea;
+                border: 2px solid #667eea;
+            }
+
+            .btn-secondary:hover {
+                background: #f0f0f0;
+            }
+
+            .features {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+                gap: 2rem;
+                margin: 3rem 0;
+            }
+
+            .feature-card {
+                background: white;
+                padding: 2rem;
+                border-radius: 8px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                transition: transform 0.3s, box-shadow 0.3s;
+            }
+
+            .feature-card:hover {
+                transform: translateY(-5px);
+                box-shadow: 0 5px 20px rgba(0,0,0,0.15);
+            }
+
+            .feature-card h3 {
+                color: #667eea;
+                margin-bottom: 1rem;
+            }
+
+            .jobs-section {
+                margin: 3rem 0;
+            }
+
+            .job-list {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+                gap: 1.5rem;
+            }
+
+            .job-card {
+                background: white;
+                padding: 1.5rem;
+                border-radius: 8px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                transition: all 0.3s;
+                border-left: 4px solid #667eea;
+            }
+
+            .job-card:hover {
+                box-shadow: 0 5px 20px rgba(0,0,0,0.15);
+            }
+
+            .job-card h3 {
+                color: #333;
+                margin-bottom: 0.5rem;
+            }
+
+            .job-meta {
+                display: flex;
+                gap: 1rem;
+                margin: 0.5rem 0;
+                font-size: 0.9rem;
+                color: #666;
+            }
+
+            .job-badge {
+                display: inline-block;
+                padding: 0.25rem 0.75rem;
+                background: #e3f2fd;
+                color: #667eea;
+                border-radius: 20px;
+                font-size: 0.85rem;
+            }
+
+            footer {
+                background: #333;
+                color: white;
+                text-align: center;
+                padding: 2rem;
+                margin-top: 3rem;
+            }
+
+            .auth-section {
+                background: white;
+                padding: 2rem;
+                border-radius: 8px;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                max-width: 400px;
+                margin: 2rem auto;
+            }
+
+            .form-group {
+                margin-bottom: 1rem;
+            }
+
+            label {
+                display: block;
+                margin-bottom: 0.5rem;
+                font-weight: 500;
+            }
+
+            input[type="email"],
+            input[type="text"],
+            input[type="password"],
+            select {
+                width: 100%;
+                padding: 0.75rem;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 1rem;
+            }
+
+            input[type="email"]:focus,
+            input[type="text"]:focus,
+            input[type="password"]:focus,
+            select:focus {
+                outline: none;
+                border-color: #667eea;
+                box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            }
+
+            .toggle-panel {
+                text-align: center;
+                margin-top: 1rem;
+                padding-top: 1rem;
+                border-top: 1px solid #ddd;
+            }
+
+            .toggle-panel a {
+                color: #667eea;
+                text-decoration: none;
+                cursor: pointer;
+            }
+
+            .toggle-panel a:hover {
+                text-decoration: underline;
+            }
+
+            .hidden {
+                display: none;
+            }
+
+            .alert {
+                padding: 1rem;
+                border-radius: 4px;
+                margin-bottom: 1rem;
+            }
+
+            .alert-success {
+                background: #d4edda;
+                color: #155724;
+                border: 1px solid #c3e6cb;
+            }
+
+            .alert-error {
+                background: #f8d7da;
+                color: #721c24;
+                border: 1px solid #f5c6cb;
+            }
+        </style>
+    </head>
+    <body>
+        <header>
+            <nav>
+                <h1>🚀 フリエン</h1>
+                <div>
+                    <a href="#" onclick="showHome()">ホーム</a>
+                    <a href="#" onclick="showJobs()">案件一覧</a>
+                    <a href="#" onclick="showEngineers()">エンジニア検索</a>
+                    <a href="#" onclick="showAuth('login')">ログイン</a>
+                </div>
+            </nav>
+        </header>
+
+        <div class="container">
+            <div id="home-section">
+                <div class="hero">
+                    <h2>フリーランスエンジニアと企業をつなぐプラットフォーム</h2>
+                    <p>プロフェッショナルなエンジニアと優れたプロジェクトが出会う場所</p>
+                    <div class="btn-group">
+                        <button class="btn btn-primary" onclick="showAuth('register')">無料登録</button>
+                        <button class="btn btn-secondary" onclick="showJobs()">案件を探す</button>
+                    </div>
+                </div>
+
+                <div class="features">
+                    <div class="feature-card">
+                        <h3>💼 企業向け</h3>
+                        <p>優秀なフリーランスエンジニアを簡単に見つけて、プロジェクトを進めることができます。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>👨‍💻 エンジニア向け</h3>
+                        <p>自分のスキルに合った案件を探して、自由に仕事を選ぶことができます。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>🤝 マッチング</h3>
+                        <p>スキルと案件の最適なマッチングで、両者の成功を支援します。</p>
+                    </div>
+                </div>
+            </div>
+
+            <div id="jobs-section" class="hidden">
+                <h2>最新の案件</h2>
+                <div id="jobs-list" class="job-list"></div>
+            </div>
+
+            <div id="engineers-section" class="hidden">
+                <h2>エンジニア検索</h2>
+                <div id="engineers-list" class="job-list"></div>
+            </div>
+
+            <div id="auth-section" class="hidden">
+                <div class="auth-section">
+                    <div id="login-panel">
+                        <h2>ログイン</h2>
+                        <form onsubmit="handleLogin(event)">
+                            <div class="form-group">
+                                <label>メールアドレス</label>
+                                <input type="email" id="login-email" required>
+                            </div>
+                            <div class="form-group">
+                                <label>パスワード</label>
+                                <input type="password" id="login-password" required>
+                            </div>
+                            <button class="btn btn-primary" style="width: 100%;">ログイン</button>
+                        </form>
+                        <div class="toggle-panel">
+                            新規会員の方は <a onclick="toggleAuthPanel()">こちら</a>
+                        </div>
+                    </div>
+
+                    <div id="register-panel" class="hidden">
+                        <h2>新規登録</h2>
+                        <form onsubmit="handleRegister(event)">
+                            <div class="form-group">
+                                <label>ユーザーネーム</label>
+                                <input type="text" id="register-username" required>
+                            </div>
+                            <div class="form-group">
+                                <label>メールアドレス</label>
+                                <input type="email" id="register-email" required>
+                            </div>
+                            <div class="form-group">
+                                <label>パスワード</label>
+                                <input type="password" id="register-password" required>
+                            </div>
+                            <div class="form-group">
+                                <label>ユーザータイプ</label>
+                                <select id="register-type" required>
+                                    <option value="">選択してください</option>
+                                    <option value="engineer">エンジニア</option>
+                                    <option value="company">企業</option>
+                                </select>
+                            </div>
+                            <button class="btn btn-primary" style="width: 100%;">登録</button>
+                        </form>
+                        <div class="toggle-panel">
+                            既にアカウントをお持ちの方は <a onclick="toggleAuthPanel()">こちら</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <p>&copy; 2024 フリーランスエンジニア集客プラットフォーム. All rights reserved.</p>
+        </footer>
+
+        <script>
+            let currentToken = localStorage.getItem('token');
+            let currentUserType = localStorage.getItem('userType');
+
+            function showHome() {
+                document.getElementById('home-section').classList.remove('hidden');
+                document.getElementById('jobs-section').classList.add('hidden');
+                document.getElementById('engineers-section').classList.add('hidden');
+                document.getElementById('auth-section').classList.add('hidden');
+            }
+
+            function showJobs() {
+                document.getElementById('home-section').classList.add('hidden');
+                document.getElementById('jobs-section').classList.remove('hidden');
+                document.getElementById('engineers-section').classList.add('hidden');
+                document.getElementById('auth-section').classList.add('hidden');
+                loadJobs();
+            }
+
+            function showEngineers() {
+                document.getElementById('home-section').classList.add('hidden');
+                document.getElementById('jobs-section').classList.add('hidden');
+                document.getElementById('engineers-section').classList.remove('hidden');
+                document.getElementById('auth-section').classList.add('hidden');
+                loadEngineers();
+            }
+
+            function showAuth(type) {
+                document.getElementById('home-section').classList.add('hidden');
+                document.getElementById('jobs-section').classList.add('hidden');
+                document.getElementById('engineers-section').classList.add('hidden');
+                document.getElementById('auth-section').classList.remove('hidden');
+
+                if (type === 'login') {
+                    document.getElementById('login-panel').classList.remove('hidden');
+                    document.getElementById('register-panel').classList.add('hidden');
+                } else {
+                    document.getElementById('login-panel').classList.add('hidden');
+                    document.getElementById('register-panel').classList.remove('hidden');
                 }
-                results.append(result)
-            except (ValueError, IndexError) as e:
-                # 不正な行はスキップ
-                continue
+            }
 
-        # 利益率でソート（降順）
-        results.sort(key=lambda x: x['profit_rate'], reverse=True)
+            function toggleAuthPanel() {
+                document.getElementById('login-panel').classList.toggle('hidden');
+                document.getElementById('register-panel').classList.toggle('hidden');
+            }
 
-        return {'results': results}
+            async function loadJobs() {
+                try {
+                    const response = await fetch('/api/jobs');
+                    const jobs = await response.json();
+                    const listDiv = document.getElementById('jobs-list');
+                    listDiv.innerHTML = '';
 
-    except Exception as e:
-        return {'error': str(e)}, 400
+                    if (jobs.length === 0) {
+                        listDiv.innerHTML = '<p>案件はまだ投稿されていません。</p>';
+                        return;
+                    }
+
+                    jobs.forEach(job => {
+                        const card = document.createElement('div');
+                        card.className = 'job-card';
+                        card.innerHTML = `
+                            <h3>${job.title}</h3>
+                            <div class="job-meta">
+                                <span class="job-badge">予算: ¥${job.budget.toLocaleString()}</span>
+                                <span class="job-badge">${job.duration}</span>
+                            </div>
+                            <p>${job.description.substring(0, 100)}...</p>
+                            <div class="job-meta">
+                                <small>必須スキル: ${job.required_skills}</small>
+                            </div>
+                        `;
+                        listDiv.appendChild(card);
+                    });
+                } catch (error) {
+                    console.error('案件読み込みエラー:', error);
+                }
+            }
+
+            async function loadEngineers() {
+                try {
+                    const response = await fetch('/api/engineers');
+                    const engineers = await response.json();
+                    const listDiv = document.getElementById('engineers-list');
+                    listDiv.innerHTML = '';
+
+                    if (engineers.length === 0) {
+                        listDiv.innerHTML = '<p>エンジニアはまだ登録されていません。</p>';
+                        return;
+                    }
+
+                    engineers.forEach(engineer => {
+                        const card = document.createElement('div');
+                        card.className = 'job-card';
+                        card.innerHTML = `
+                            <h3>${engineer.full_name}</h3>
+                            <div class="job-meta">
+                                <span class="job-badge">時給: ¥${engineer.hourly_rate.toLocaleString()}</span>
+                                <span class="job-badge">経験: ${engineer.experience_years}年</span>
+                            </div>
+                            <p>スキル: ${engineer.skills}</p>
+                            <div class="job-meta">
+                                <small>⭐ ${engineer.rating.toFixed(1)} (${engineer.total_projects}件)</small>
+                            </div>
+                        `;
+                        listDiv.appendChild(card);
+                    });
+                } catch (error) {
+                    console.error('エンジニア読み込みエラー:', error);
+                }
+            }
+
+            async function handleLogin(event) {
+                event.preventDefault();
+                const email = document.getElementById('login-email').value;
+                const password = document.getElementById('login-password').value;
+
+                try {
+                    const response = await fetch('/api/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email, password })
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        localStorage.setItem('token', data.access_token);
+                        localStorage.setItem('userType', data.user_type);
+                        alert('ログインしました！');
+                        showHome();
+                    } else {
+                        alert('ログインに失敗しました。');
+                    }
+                } catch (error) {
+                    console.error('ログインエラー:', error);
+                    alert('エラーが発生しました。');
+                }
+            }
+
+            async function handleRegister(event) {
+                event.preventDefault();
+                const username = document.getElementById('register-username').value;
+                const email = document.getElementById('register-email').value;
+                const password = document.getElementById('register-password').value;
+                const user_type = document.getElementById('register-type').value;
+
+                try {
+                    const response = await fetch('/api/register', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ username, email, password, user_type })
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        localStorage.setItem('token', data.access_token);
+                        localStorage.setItem('userType', data.user_type);
+                        alert('登録成功しました！');
+                        showHome();
+                    } else {
+                        const error = await response.json();
+                        alert('登録に失敗しました: ' + error.detail);
+                    }
+                } catch (error) {
+                    console.error('登録エラー:', error);
+                    alert('エラーが発生しました。');
+                }
+            }
+        </script>
+    </body>
+    </html>
+    """
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
