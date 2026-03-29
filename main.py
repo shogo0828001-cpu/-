@@ -1,14 +1,12 @@
-from fastapi import FastAPI, Depends, HTTPException, status, File, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, ForeignKey, Boolean, Table
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, ForeignKey, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
 from pydantic import BaseModel, EmailStr
 from datetime import datetime, timedelta
-from passlib.context import CryptContext
-from jose import JWTError, jwt
+import hashlib
 import os
 from pathlib import Path
 
@@ -17,11 +15,6 @@ DATABASE_URL = "sqlite:///./freelance.db"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
-
-# Security setup
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
-ALGORITHM = "HS256"
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # ============================================================================
 # Database Models
@@ -33,7 +26,7 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, index=True)
     username = Column(String, unique=True, index=True)
-    hashed_password = Column(String)
+    password_hash = Column(String)
     user_type = Column(String)  # "engineer" or "company"
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -49,12 +42,11 @@ class Engineer(Base):
     user_id = Column(Integer, ForeignKey("users.id"), unique=True)
     full_name = Column(String)
     bio = Column(Text)
-    hourly_rate = Column(Float)  # 時給（円）
+    hourly_rate = Column(Float)
     experience_years = Column(Integer)
-    skills = Column(String)  # JSON形式：["Python", "JavaScript", ...]
+    skills = Column(String)
     portfolio_url = Column(String, nullable=True)
     github_url = Column(String, nullable=True)
-    avatar_url = Column(String, nullable=True)
     rating = Column(Float, default=0.0)
     total_projects = Column(Integer, default=0)
     available = Column(Boolean, default=True)
@@ -72,7 +64,6 @@ class Company(Base):
     industry = Column(String)
     website = Column(String, nullable=True)
     description = Column(Text)
-    logo_url = Column(String, nullable=True)
     employee_count = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -87,10 +78,10 @@ class Job(Base):
     company_id = Column(Integer, ForeignKey("companies.id"))
     title = Column(String)
     description = Column(Text)
-    required_skills = Column(String)  # JSON形式
+    required_skills = Column(String)
     budget = Column(Float)
-    duration = Column(String)  # "短期", "中期", "長期"
-    status = Column(String, default="active")  # active, closed, paused
+    duration = Column(String)
+    status = Column(String, default="active")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -104,7 +95,7 @@ class Application(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
     job_id = Column(Integer, ForeignKey("jobs.id"))
-    status = Column(String, default="pending")  # pending, accepted, rejected, withdrawn
+    status = Column(String, default="pending")
     proposed_rate = Column(Float, nullable=True)
     cover_letter = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -112,18 +103,6 @@ class Application(Base):
 
     user = relationship("User", back_populates="applications")
     job = relationship("Job", back_populates="applications")
-
-
-class Review(Base):
-    __tablename__ = "reviews"
-
-    id = Column(Integer, primary_key=True, index=True)
-    from_user_id = Column(Integer, ForeignKey("users.id"))
-    to_user_id = Column(Integer, ForeignKey("users.id"))
-    job_id = Column(Integer, ForeignKey("jobs.id"), nullable=True)
-    rating = Column(Integer)  # 1-5
-    comment = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 # Create tables
@@ -137,7 +116,7 @@ class UserRegister(BaseModel):
     email: EmailStr
     username: str
     password: str
-    user_type: str  # "engineer" or "company"
+    user_type: str
 
 
 class UserLogin(BaseModel):
@@ -177,15 +156,18 @@ class ApplicationCreate(BaseModel):
     cover_letter: str
 
 
-class ReviewCreate(BaseModel):
-    to_user_id: int
-    rating: int
-    comment: str
+# ============================================================================
+# Utilities
+# ============================================================================
+
+def hash_password(password: str) -> str:
+    """Simple password hashing"""
+    return hashlib.sha256(password.encode()).hexdigest()
 
 
-class Token(BaseModel):
-    access_token: str
-    token_type: str
+def verify_password(password: str, hash_value: str) -> bool:
+    """Verify password"""
+    return hash_password(password) == hash_value
 
 
 # ============================================================================
@@ -213,46 +195,6 @@ def get_db():
 
 
 # ============================================================================
-# Authentication
-# ============================================================================
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
-
-
-def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
-
-
-def create_access_token(data: dict, expires_delta: timedelta = None):
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(days=7)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-
-async def get_current_user(token: str = None, db: Session = Depends(get_db)):
-    if not token:
-        raise HTTPException(status_code=401, detail="認証が必要です")
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: int = payload.get("sub")
-        if user_id is None:
-            raise HTTPException(status_code=401, detail="無効なトークンです")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="無効なトークンです")
-
-    user = db.query(User).filter(User.id == user_id).first()
-    if user is None:
-        raise HTTPException(status_code=401, detail="ユーザーが見つかりません")
-    return user
-
-
-# ============================================================================
 # API Routes
 # ============================================================================
 
@@ -265,34 +207,28 @@ async def root():
 @app.post("/api/register")
 async def register(user_data: UserRegister, db: Session = Depends(get_db)):
     """新規登録"""
-    # ユーザー存在確認
     if db.query(User).filter(User.email == user_data.email).first():
         raise HTTPException(status_code=400, detail="このメールアドレスは既に登録されています")
 
     if db.query(User).filter(User.username == user_data.username).first():
         raise HTTPException(status_code=400, detail="このユーザー名は既に使用されています")
 
-    # ユーザー作成
-    hashed_password = get_password_hash(user_data.password)
+    password_hash = hash_password(user_data.password)
     user = User(
         email=user_data.email,
         username=user_data.username,
-        hashed_password=hashed_password,
+        password_hash=password_hash,
         user_type=user_data.user_type
     )
     db.add(user)
     db.commit()
     db.refresh(user)
 
-    # トークン生成
-    access_token = create_access_token(data={"sub": user.id})
-
     return {
         "message": "登録成功しました",
-        "access_token": access_token,
-        "token_type": "bearer",
         "user_id": user.id,
-        "user_type": user.user_type
+        "user_type": user.user_type,
+        "username": user.username
     }
 
 
@@ -300,30 +236,30 @@ async def register(user_data: UserRegister, db: Session = Depends(get_db)):
 async def login(user_data: UserLogin, db: Session = Depends(get_db)):
     """ログイン"""
     user = db.query(User).filter(User.email == user_data.email).first()
-    if not user or not verify_password(user_data.password, user.hashed_password):
+    if not user or not verify_password(user_data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="メールアドレスまたはパスワードが間違っています")
 
-    access_token = create_access_token(data={"sub": user.id})
     return {
-        "access_token": access_token,
-        "token_type": "bearer",
+        "message": "ログイン成功しました",
         "user_id": user.id,
-        "user_type": user.user_type
+        "user_type": user.user_type,
+        "username": user.username
     }
 
 
 @app.post("/api/engineer/profile")
 async def create_engineer_profile(
     profile: EngineerProfile,
-    current_user: User = Depends(get_current_user),
+    user_id: int,
     db: Session = Depends(get_db)
 ):
     """エンジニアプロフィール作成"""
-    if current_user.user_type != "engineer":
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or user.user_type != "engineer":
         raise HTTPException(status_code=403, detail="エンジニアのみ使用できます")
 
     engineer = Engineer(
-        user_id=current_user.id,
+        user_id=user.id,
         full_name=profile.full_name,
         bio=profile.bio,
         hourly_rate=profile.hourly_rate,
@@ -341,15 +277,16 @@ async def create_engineer_profile(
 @app.post("/api/company/profile")
 async def create_company_profile(
     profile: CompanyProfile,
-    current_user: User = Depends(get_current_user),
+    user_id: int,
     db: Session = Depends(get_db)
 ):
     """企業プロフィール作成"""
-    if current_user.user_type != "company":
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or user.user_type != "company":
         raise HTTPException(status_code=403, detail="企業のみ使用できます")
 
     company = Company(
-        user_id=current_user.id,
+        user_id=user.id,
         company_name=profile.company_name,
         industry=profile.industry,
         website=profile.website,
@@ -365,14 +302,15 @@ async def create_company_profile(
 @app.post("/api/jobs")
 async def create_job(
     job: JobCreate,
-    current_user: User = Depends(get_current_user),
+    user_id: int,
     db: Session = Depends(get_db)
 ):
     """案件投稿（企業向け）"""
-    if current_user.user_type != "company":
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or user.user_type != "company":
         raise HTTPException(status_code=403, detail="企業のみ案件投稿できます")
 
-    company = db.query(Company).filter(Company.user_id == current_user.id).first()
+    company = db.query(Company).filter(Company.user_id == user.id).first()
     if not company:
         raise HTTPException(status_code=404, detail="企業プロフィールが見つかりません")
 
@@ -436,28 +374,27 @@ async def get_job(job_id: int, db: Session = Depends(get_db)):
 @app.post("/api/applications")
 async def create_application(
     app_data: ApplicationCreate,
-    current_user: User = Depends(get_current_user),
+    user_id: int,
     db: Session = Depends(get_db)
 ):
     """案件に応募"""
-    if current_user.user_type != "engineer":
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or user.user_type != "engineer":
         raise HTTPException(status_code=403, detail="エンジニアのみ応募できます")
 
-    # 案件存在確認
     job = db.query(Job).filter(Job.id == app_data.job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="案件が見つかりません")
 
-    # 既存の応募確認
     existing = db.query(Application).filter(
-        Application.user_id == current_user.id,
+        Application.user_id == user.id,
         Application.job_id == app_data.job_id
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="既に応募しています")
 
     application = Application(
-        user_id=current_user.id,
+        user_id=user.id,
         job_id=app_data.job_id,
         proposed_rate=app_data.proposed_rate,
         cover_letter=app_data.cover_letter
@@ -564,6 +501,7 @@ def get_home_page():
                 color: white;
                 text-decoration: none;
                 margin: 0 1rem;
+                cursor: pointer;
                 transition: opacity 0.3s;
             }
 
@@ -648,12 +586,11 @@ def get_home_page():
                 padding: 2rem;
                 border-radius: 8px;
                 box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-                transition: transform 0.3s, box-shadow 0.3s;
+                transition: transform 0.3s;
             }
 
             .feature-card:hover {
                 transform: translateY(-5px);
-                box-shadow: 0 5px 20px rgba(0,0,0,0.15);
             }
 
             .feature-card h3 {
@@ -661,14 +598,11 @@ def get_home_page():
                 margin-bottom: 1rem;
             }
 
-            .jobs-section {
-                margin: 3rem 0;
-            }
-
             .job-list {
                 display: grid;
                 grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
                 gap: 1.5rem;
+                margin: 2rem 0;
             }
 
             .job-card {
@@ -676,25 +610,11 @@ def get_home_page():
                 padding: 1.5rem;
                 border-radius: 8px;
                 box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-                transition: all 0.3s;
                 border-left: 4px solid #667eea;
             }
 
-            .job-card:hover {
-                box-shadow: 0 5px 20px rgba(0,0,0,0.15);
-            }
-
             .job-card h3 {
-                color: #333;
                 margin-bottom: 0.5rem;
-            }
-
-            .job-meta {
-                display: flex;
-                gap: 1rem;
-                margin: 0.5rem 0;
-                font-size: 0.9rem;
-                color: #666;
             }
 
             .job-badge {
@@ -704,23 +624,16 @@ def get_home_page():
                 color: #667eea;
                 border-radius: 20px;
                 font-size: 0.85rem;
-            }
-
-            footer {
-                background: #333;
-                color: white;
-                text-align: center;
-                padding: 2rem;
-                margin-top: 3rem;
+                margin: 0.25rem 0.25rem 0.25rem 0;
             }
 
             .auth-section {
                 background: white;
                 padding: 2rem;
                 border-radius: 8px;
-                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
                 max-width: 400px;
                 margin: 2rem auto;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             }
 
             .form-group {
@@ -733,10 +646,7 @@ def get_home_page():
                 font-weight: 500;
             }
 
-            input[type="email"],
-            input[type="text"],
-            input[type="password"],
-            select {
+            input, select {
                 width: 100%;
                 padding: 0.75rem;
                 border: 1px solid #ddd;
@@ -744,10 +654,7 @@ def get_home_page():
                 font-size: 1rem;
             }
 
-            input[type="email"]:focus,
-            input[type="text"]:focus,
-            input[type="password"]:focus,
-            select:focus {
+            input:focus, select:focus {
                 outline: none;
                 border-color: #667eea;
                 box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
@@ -762,8 +669,8 @@ def get_home_page():
 
             .toggle-panel a {
                 color: #667eea;
-                text-decoration: none;
                 cursor: pointer;
+                text-decoration: none;
             }
 
             .toggle-panel a:hover {
@@ -774,22 +681,12 @@ def get_home_page():
                 display: none;
             }
 
-            .alert {
-                padding: 1rem;
-                border-radius: 4px;
-                margin-bottom: 1rem;
-            }
-
-            .alert-success {
-                background: #d4edda;
-                color: #155724;
-                border: 1px solid #c3e6cb;
-            }
-
-            .alert-error {
-                background: #f8d7da;
-                color: #721c24;
-                border: 1px solid #f5c6cb;
+            footer {
+                background: #333;
+                color: white;
+                text-align: center;
+                padding: 2rem;
+                margin-top: 3rem;
             }
         </style>
     </head>
@@ -798,10 +695,10 @@ def get_home_page():
             <nav>
                 <h1>🚀 フリエン</h1>
                 <div>
-                    <a href="#" onclick="showHome()">ホーム</a>
-                    <a href="#" onclick="showJobs()">案件一覧</a>
-                    <a href="#" onclick="showEngineers()">エンジニア検索</a>
-                    <a href="#" onclick="showAuth('login')">ログイン</a>
+                    <a onclick="showHome()">ホーム</a>
+                    <a onclick="showJobs()">案件一覧</a>
+                    <a onclick="showEngineers()">エンジニア検索</a>
+                    <a onclick="showAuth('login')">ログイン</a>
                 </div>
             </nav>
         </header>
@@ -901,7 +798,7 @@ def get_home_page():
         </footer>
 
         <script>
-            let currentToken = localStorage.getItem('token');
+            let currentUserId = localStorage.getItem('userId');
             let currentUserType = localStorage.getItem('userType');
 
             function showHome() {
@@ -964,19 +861,17 @@ def get_home_page():
                         card.className = 'job-card';
                         card.innerHTML = `
                             <h3>${job.title}</h3>
-                            <div class="job-meta">
-                                <span class="job-badge">予算: ¥${job.budget.toLocaleString()}</span>
+                            <div>
+                                <span class="job-badge">予算: ¥${Math.floor(job.budget).toLocaleString()}</span>
                                 <span class="job-badge">${job.duration}</span>
                             </div>
                             <p>${job.description.substring(0, 100)}...</p>
-                            <div class="job-meta">
-                                <small>必須スキル: ${job.required_skills}</small>
-                            </div>
+                            <small>必須スキル: ${job.required_skills}</small>
                         `;
                         listDiv.appendChild(card);
                     });
                 } catch (error) {
-                    console.error('案件読み込みエラー:', error);
+                    console.error('エラー:', error);
                 }
             }
 
@@ -997,19 +892,17 @@ def get_home_page():
                         card.className = 'job-card';
                         card.innerHTML = `
                             <h3>${engineer.full_name}</h3>
-                            <div class="job-meta">
-                                <span class="job-badge">時給: ¥${engineer.hourly_rate.toLocaleString()}</span>
+                            <div>
+                                <span class="job-badge">時給: ¥${Math.floor(engineer.hourly_rate).toLocaleString()}</span>
                                 <span class="job-badge">経験: ${engineer.experience_years}年</span>
                             </div>
                             <p>スキル: ${engineer.skills}</p>
-                            <div class="job-meta">
-                                <small>⭐ ${engineer.rating.toFixed(1)} (${engineer.total_projects}件)</small>
-                            </div>
+                            <small>⭐ ${engineer.rating.toFixed(1)} (${engineer.total_projects}件)</small>
                         `;
                         listDiv.appendChild(card);
                     });
                 } catch (error) {
-                    console.error('エンジニア読み込みエラー:', error);
+                    console.error('エラー:', error);
                 }
             }
 
@@ -1027,7 +920,7 @@ def get_home_page():
 
                     if (response.ok) {
                         const data = await response.json();
-                        localStorage.setItem('token', data.access_token);
+                        localStorage.setItem('userId', data.user_id);
                         localStorage.setItem('userType', data.user_type);
                         alert('ログインしました！');
                         showHome();
@@ -1035,7 +928,6 @@ def get_home_page():
                         alert('ログインに失敗しました。');
                     }
                 } catch (error) {
-                    console.error('ログインエラー:', error);
                     alert('エラーが発生しました。');
                 }
             }
@@ -1056,7 +948,7 @@ def get_home_page():
 
                     if (response.ok) {
                         const data = await response.json();
-                        localStorage.setItem('token', data.access_token);
+                        localStorage.setItem('userId', data.user_id);
                         localStorage.setItem('userType', data.user_type);
                         alert('登録成功しました！');
                         showHome();
@@ -1065,7 +957,6 @@ def get_home_page():
                         alert('登録に失敗しました: ' + error.detail);
                     }
                 } catch (error) {
-                    console.error('登録エラー:', error);
                     alert('エラーが発生しました。');
                 }
             }
